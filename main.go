@@ -103,18 +103,16 @@ type influxDBCollector struct {
 	ch      chan *influxDBSample
 
 	databaseLabel string
-	skipMetrics   []string
 
 	// Udp
 	conn *net.UDPConn
 }
 
-func newInfluxDBCollector(databaseLabel string, skipMetrics []string) *influxDBCollector {
+func newInfluxDBCollector(databaseLabel string) *influxDBCollector {
 	c := &influxDBCollector{
 		ch:            make(chan *influxDBSample),
 		samples:       map[string]*influxDBSample{},
 		databaseLabel: databaseLabel,
-		skipMetrics:   skipMetrics,
 	}
 	go c.processSamples()
 	return c
@@ -142,6 +140,15 @@ func (c *influxDBCollector) influxDBPost(w http.ResponseWriter, r *http.Request)
 
 	// InfluxDB returns a 204 on success.
 	http.Error(w, "", 204)
+}
+
+func stringInSlice(a string, list []string) bool {
+	for _, b := range list {
+		if b == a {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *influxDBCollector) parsePointsToSample(points []models.Point, db string) {
@@ -174,7 +181,7 @@ func (c *influxDBCollector) parsePointsToSample(points []models.Point, db string
 			} else {
 				name = fmt.Sprintf("%s_%s", s.Name(), field)
 			}
-			if name == "" {
+			if stringInSlice(string(s.Name()), *ignoreMetrics) {
 				continue
 			}
 			sample := &influxDBSample{
