@@ -43,7 +43,10 @@ var (
 	metricsPath   = kingpin.Flag("web.telemetry-path", "Path under which to expose Prometheus metrics.").Default("/metrics").String()
 	sampleExpiry  = kingpin.Flag("influxdb.sample-expiry", "How long a sample is valid for.").Default("5m").Duration()
 	bindAddress   = kingpin.Flag("udp.bind-address", "Address on which to listen for udp packets.").Default(":9122").String()
-	lastPush      = prometheus.NewGauge(
+	databaseLabel = kingpin.Flag("influxdb.database-label", "Database label to add. Leave empty to disable").Default("").String()
+	ignoreMetrics = kingpin.Flag("influxdb.ignore-metrics", "Ignore metrics from influxdb").Strings()
+
+	lastPush = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "influxdb_last_push_timestamp_seconds",
 			Help: "Unix timestamp of the last received influxdb metrics push in seconds.",
@@ -89,7 +92,7 @@ func (c *influxDBCollector) serveUdp() {
 				return
 			}
 
-			c.parsePointsToSample(points)
+			c.parsePointsToSample(points, "udp")
 		}
 	}
 }
@@ -99,14 +102,19 @@ type influxDBCollector struct {
 	mu      sync.Mutex
 	ch      chan *influxDBSample
 
+	databaseLabel string
+	skipMetrics   []string
+
 	// Udp
 	conn *net.UDPConn
 }
 
-func newInfluxDBCollector() *influxDBCollector {
+func newInfluxDBCollector(databaseLabel string, skipMetrics []string) *influxDBCollector {
 	c := &influxDBCollector{
-		ch:      make(chan *influxDBSample),
-		samples: map[string]*influxDBSample{},
+		ch:            make(chan *influxDBSample),
+		samples:       map[string]*influxDBSample{},
+		databaseLabel: databaseLabel,
+		skipMetrics:   skipMetrics,
 	}
 	go c.processSamples()
 	return c
@@ -130,13 +138,13 @@ func (c *influxDBCollector) influxDBPost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	c.parsePointsToSample(points)
+	c.parsePointsToSample(points, r.FormValue("db"))
 
 	// InfluxDB returns a 204 on success.
 	http.Error(w, "", 204)
 }
 
-func (c *influxDBCollector) parsePointsToSample(points []models.Point) {
+func (c *influxDBCollector) parsePointsToSample(points []models.Point, db string) {
 	for _, s := range points {
 		fields, err := s.Fields()
 		if err != nil {
@@ -166,12 +174,17 @@ func (c *influxDBCollector) parsePointsToSample(points []models.Point) {
 			} else {
 				name = fmt.Sprintf("%s_%s", s.Name(), field)
 			}
-
+			if name == "" {
+				continue
+			}
 			sample := &influxDBSample{
 				Name:      invalidChars.ReplaceAllString(name, "_"),
 				Timestamp: s.Time(),
 				Value:     value,
 				Labels:    map[string]string{},
+			}
+			if c.databaseLabel != "" && db != "" {
+				sample.Labels[c.databaseLabel] = db
 			}
 			for _, v := range s.Tags() {
 				sample.Labels[invalidChars.ReplaceAllString(string(v.Key), "_")] = string(v.Value)
@@ -261,7 +274,7 @@ func main() {
 	log.Infoln("Starting influxdb_exporter", version.Info())
 	log.Infoln("Build context", version.BuildContext())
 
-	c := newInfluxDBCollector()
+	c := newInfluxDBCollector(*databaseLabel)
 	prometheus.MustRegister(c)
 
 	addr, err := net.ResolveUDPAddr("udp", *bindAddress)
