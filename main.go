@@ -44,7 +44,7 @@ var (
 	sampleExpiry  = kingpin.Flag("influxdb.sample-expiry", "How long a sample is valid for.").Default("5m").Duration()
 	bindAddress   = kingpin.Flag("udp.bind-address", "Address on which to listen for udp packets.").Default(":9122").String()
 	databaseLabel = kingpin.Flag("influxdb.database-label", "Database label to add. Leave empty to disable").Default("").String()
-	ignoreMetrics = kingpin.Flag("influxdb.ignore-metrics", "Ignore metrics from influxdb").Strings()
+	scrapeMetrics = kingpin.Flag("influxdb.scrape-metrics", "Metrics to export from influxdb").Strings()
 
 	lastPush = prometheus.NewGauge(
 		prometheus.GaugeOpts{
@@ -181,7 +181,7 @@ func (c *influxDBCollector) parsePointsToSample(points []models.Point, db string
 			} else {
 				name = fmt.Sprintf("%s_%s", s.Name(), field)
 			}
-			if stringInSlice(string(s.Name()), *ignoreMetrics) {
+			if stringInSlice(string(s.Name()), *scrapeMetrics) == false {
 				continue
 			}
 			sample := &influxDBSample{
